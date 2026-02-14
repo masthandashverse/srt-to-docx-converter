@@ -1,8 +1,3 @@
-"""
-app.py - Simple SRT to DOCX Converter
-Upload SRT files → Save DOCX files directly to your folder
-"""
-
 import os
 import io
 import zipfile
@@ -23,6 +18,11 @@ st.set_page_config(
 # ─── Simple CSS ───────────────────────────────────────────────
 st.markdown("""
 <style>
+    .stDownloadButton > button {
+        width: 100%;
+        background-color: #1a478a !important;
+        color: white !important;
+    }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -63,25 +63,38 @@ def parse_uploaded_srt(uploaded_file):
     return subtitles
 
 
-def convert_and_save(subtitles, filename, output_folder):
-    """Convert subtitles and save DOCX directly to folder."""
+def convert_to_docx(subtitles, filename):
+    """Convert subtitles to DOCX bytes."""
     base_name = os.path.splitext(filename)[0]
     docx_filename = f"{base_name}.docx"
-    output_path = os.path.join(output_folder, docx_filename)
 
-    # Handle duplicate filenames
-    counter = 1
-    while os.path.exists(output_path):
-        output_path = os.path.join(output_folder, f"{base_name} ({counter}).docx")
-        counter += 1
+    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp:
+        tmp_path = tmp.name
 
-    writer.create_document(
-        subtitles=subtitles,
-        source_filename=filename,
-        output_path=output_path
-    )
+    try:
+        writer.create_document(
+            subtitles=subtitles,
+            source_filename=filename,
+            output_path=tmp_path
+        )
 
-    return output_path
+        with open(tmp_path, 'rb') as f:
+            docx_bytes = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return docx_filename, docx_bytes
+
+
+def make_zip(files_list):
+    """Create ZIP from list of (filename, bytes) tuples."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for name, data in files_list:
+            zf.writestr(name, data)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def format_size(size_bytes):
@@ -98,35 +111,20 @@ def format_size(size_bytes):
 
 # Title
 st.title("📝 SRT to DOCX Converter")
-st.write("Upload subtitle files → Save Word documents to your folder")
+st.write("Upload subtitle files → Get Word documents")
 st.divider()
-
-# ─── Output Folder ────────────────────────────────────────────
-st.subheader("📁 Output Folder")
-
-# Default folder = Desktop
-default_folder = os.path.join(os.path.expanduser("~"), "Desktop", "SRT_Converted")
-
-output_folder = st.text_input(
-    "Enter folder path where DOCX files will be saved:",
-    value=default_folder,
-    help="Type the full folder path. Folder will be created if it doesn't exist."
-)
 
 # ─── File Upload ──────────────────────────────────────────────
-st.divider()
-st.subheader("📄 Upload SRT Files")
-
 uploaded_files = st.file_uploader(
-    "Choose SRT files",
+    "Upload SRT files",
     type=["srt"],
     accept_multiple_files=True
 )
 
-# ─── Main Logic ───────────────────────────────────────────────
+# ─── Validate File Sizes ─────────────────────────────────────
 if uploaded_files:
 
-    # Validate file sizes
+    # Check file sizes
     oversized = []
     for f in uploaded_files:
         size_mb = f.size / (1024 * 1024)
@@ -140,39 +138,20 @@ if uploaded_files:
         )
         st.stop()
 
-    # Show file count
+    # Show uploaded files count
     total_size = sum(f.size for f in uploaded_files)
     st.info(
         f"📁 **{len(uploaded_files)}** file(s) uploaded "
         f"({format_size(total_size)})"
     )
 
-    # Show files list
-    with st.expander("View uploaded files"):
-        for f in uploaded_files:
-            st.write(f"📄 {f.name} — {format_size(f.size)}")
-
-    st.divider()
-
     # ─── Convert Button ───────────────────────────────────────
     if st.button(
-        f"🚀 Convert & Save {len(uploaded_files)} file(s) to folder",
+        f"🚀 Convert {len(uploaded_files)} file(s)",
         type="primary",
         use_container_width=True
     ):
-        # Validate folder path
-        if not output_folder.strip():
-            st.error("❌ Please enter an output folder path!")
-            st.stop()
-
-        # Create folder
-        try:
-            os.makedirs(output_folder.strip(), exist_ok=True)
-        except Exception as e:
-            st.error(f"❌ Cannot create folder: {e}")
-            st.stop()
-
-        saved_files = []
+        results = []
         errors = []
 
         progress = st.progress(0, text="Converting...")
@@ -192,43 +171,258 @@ if uploaded_files:
                     errors.append(f"❌ **{fname}** — No subtitles found")
                     continue
 
-                # Save directly to folder
-                saved_path = convert_and_save(
-                    subs, fname, output_folder.strip()
-                )
-                saved_files.append((fname, saved_path, len(subs)))
+                docx_name, docx_bytes = convert_to_docx(subs, fname)
+                results.append((docx_name, docx_bytes, len(subs)))
 
             except Exception as e:
                 errors.append(f"❌ **{fname}** — {str(e)}")
 
         progress.progress(1.0, text="✅ Done!")
 
-        # ─── Show Results ─────────────────────────────────────
-        if saved_files:
-            st.success(
-                f"🎉 **{len(saved_files)} file(s) saved** to:\n\n"
-                f"`{output_folder.strip()}`"
-            )
+        # Store results
+        st.session_state["results"] = results
+        st.session_state["errors"] = errors
 
-            st.divider()
-            st.subheader("✅ Saved Files")
+    # ─── Show Results ─────────────────────────────────────────
+    if "results" in st.session_state:
+        results = st.session_state["results"]
+        errors = st.session_state["errors"]
 
-            for original_name, saved_path, sub_count in saved_files:
-                docx_name = os.path.basename(saved_path)
-                st.write(
-                    f"✅ **{docx_name}** — "
-                    f"{sub_count} subtitles"
-                )
+        if results:
+            st.success(f"✅ {len(results)} file(s) converted!")
 
         if errors:
-            st.divider()
             st.warning(f"⚠️ {len(errors)} file(s) failed")
             for err in errors:
                 st.write(err)
+
+        if results:
+            st.divider()
+            st.subheader("💾 Download")
+
+            # ZIP download for multiple files
+            if len(results) > 1:
+                zip_data = make_zip([(n, b) for n, b, _ in results])
+                st.download_button(
+                    label=f"📦 Download ALL ({len(results)} files) as ZIP",
+                    data=zip_data,
+                    file_name="converted_subtitles.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+                st.divider()
+
+            # Individual downloads
+            for docx_name, docx_bytes, sub_count in results:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"📄 **{docx_name}** — {sub_count} subtitles")
+                with col2:
+                    st.download_button(
+                        label="⬇️ Download",
+                        data=docx_bytes,
+                        file_name=docx_name,
+                        mime="application/vnd.openxmlformats-officedocument"
+                             ".wordprocessingml.document",
+                        key=f"dl_{docx_name}"
+                    )
 
 else:
     st.info("👆 Upload `.srt` files to get started")
 
 # ─── Footer ───────────────────────────────────────────────────
 st.divider()
-st.caption("SRT to DOCX Converter — Files save directly to your folder")
+st.caption("SRT to DOCX Converter")
+```
+
+## 2. `docx_writer.py` — Plain Format Only
+
+```python
+"""
+DOCX Writer Module
+Creates Word documents from subtitle data - Plain English format only.
+"""
+
+from datetime import datetime
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+
+class DOCXWriter:
+    """Creates DOCX documents from subtitle data. Plain format only."""
+
+    COLOR_PRIMARY = RGBColor(0x1A, 0x47, 0x8A)
+    COLOR_TEXT = RGBColor(0x33, 0x33, 0x33)
+    COLOR_MUTED = RGBColor(0x88, 0x88, 0x88)
+    COLOR_LIGHT = RGBColor(0xCC, 0xCC, 0xCC)
+    COLOR_TIMESTAMP = RGBColor(0x7F, 0x8C, 0x8D)
+
+    def __init__(self):
+        self.doc = None
+
+    def create_document(self, subtitles, source_filename, output_path):
+        """
+        Create a DOCX document from subtitle data.
+
+        Args:
+            subtitles: List of SubtitleEntry objects or dicts
+            source_filename: Original SRT filename
+            output_path: Path to save the DOCX file
+        """
+        self.doc = Document()
+        self._setup_page(self.doc)
+        self._add_title(self.doc, source_filename)
+        self._add_metadata(self.doc, subtitles, source_filename)
+        self._add_spacer(self.doc)
+
+        # Convert SubtitleEntry objects to dicts
+        subtitle_dicts = []
+        for sub in subtitles:
+            if hasattr(sub, 'to_dict'):
+                subtitle_dicts.append(sub.to_dict())
+            elif isinstance(sub, dict):
+                subtitle_dicts.append(sub)
+            else:
+                raise TypeError(f"Unexpected subtitle type: {type(sub)}")
+
+        # Write plain format
+        self._write_plain_format(self.doc, subtitle_dicts)
+
+        # Add footer
+        self._add_footer(self.doc, len(subtitle_dicts))
+
+        # Save
+        self.doc.save(output_path)
+
+    def _setup_page(self, doc):
+        """Configure page margins."""
+        section = doc.sections[0]
+        section.top_margin = Inches(0.8)
+        section.bottom_margin = Inches(0.8)
+        section.left_margin = Inches(0.8)
+        section.right_margin = Inches(0.8)
+        section.page_width = Inches(8.5)
+        section.page_height = Inches(11)
+
+    def _add_title(self, doc, source_filename):
+        """Add document title."""
+        title = doc.add_heading(level=0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        title_run = title.add_run(f"Subtitles: {source_filename}")
+        title_run.font.size = Pt(18)
+        title_run.font.color.rgb = self.COLOR_PRIMARY
+        title_run.bold = True
+
+    def _add_metadata(self, doc, subtitles, source_filename):
+        """Add document info."""
+        meta_para = doc.add_paragraph()
+        meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        info_parts = [
+            f"Source: {source_filename}",
+            f"Total Subtitles: {len(subtitles)}",
+            f"Converted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "Language: English",
+        ]
+
+        # Get duration from last subtitle
+        if subtitles:
+            try:
+                last_sub = subtitles[-1]
+                if hasattr(last_sub, 'end_time'):
+                    end_time = last_sub.end_time
+                elif isinstance(last_sub, dict):
+                    end_time = last_sub.get('end_time', '')
+                else:
+                    end_time = ''
+
+                if end_time:
+                    info_parts.append(f"Duration: ~{end_time}")
+            except (AttributeError, IndexError):
+                pass
+
+        info_text = "  |  ".join(info_parts)
+        meta_run = meta_para.add_run(info_text)
+        meta_run.font.size = Pt(8)
+        meta_run.font.color.rgb = self.COLOR_MUTED
+        meta_run.italic = True
+
+        # Horizontal line
+        line_para = doc.add_paragraph()
+        line_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        line_run = line_para.add_run("_" * 80)
+        line_run.font.size = Pt(6)
+        line_run.font.color.rgb = self.COLOR_LIGHT
+
+    def _add_spacer(self, doc):
+        """Add blank space."""
+        spacer = doc.add_paragraph()
+        spacer.paragraph_format.space_before = Pt(2)
+        spacer.paragraph_format.space_after = Pt(2)
+
+    def _add_footer(self, doc, count):
+        """Add document footer."""
+        self._add_spacer(doc)
+
+        line_para = doc.add_paragraph()
+        line_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        line_run = line_para.add_run("_" * 80)
+        line_run.font.size = Pt(6)
+        line_run.font.color.rgb = self.COLOR_LIGHT
+
+        footer_para = doc.add_paragraph()
+        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        footer_run = footer_para.add_run(
+            f"Generated by SRT to DOCX Converter  |  "
+            f"{count} subtitle entries  |  "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        footer_run.font.size = Pt(7)
+        footer_run.font.color.rgb = self.COLOR_MUTED
+        footer_run.italic = True
+
+    def _write_plain_format(self, doc, subtitles):
+        """Write subtitles in plain numbered format."""
+        for i, sub in enumerate(subtitles):
+
+            # Number + Timestamp line
+            header_para = doc.add_paragraph()
+            header_para.paragraph_format.space_before = Pt(6)
+            header_para.paragraph_format.space_after = Pt(2)
+
+            # Number
+            index_run = header_para.add_run(f"[{sub['index']}]  ")
+            index_run.bold = True
+            index_run.font.size = Pt(9)
+            index_run.font.color.rgb = self.COLOR_PRIMARY
+
+            # Timestamp
+            time_run = header_para.add_run(
+                f"{sub['start_time']}  -->  {sub['end_time']}"
+            )
+            time_run.font.size = Pt(9)
+            time_run.font.color.rgb = self.COLOR_TIMESTAMP
+            time_run.italic = True
+            time_run.font.name = 'Consolas'
+
+            # Subtitle text
+            text_para = doc.add_paragraph()
+            text_para.paragraph_format.space_before = Pt(0)
+            text_para.paragraph_format.space_after = Pt(4)
+            text_para.paragraph_format.left_indent = Inches(0.3)
+
+            text_run = text_para.add_run(sub['text'])
+            text_run.font.size = Pt(11)
+            text_run.font.color.rgb = self.COLOR_TEXT
+            text_run.font.name = 'Calibri'
+
+            # Separator line (except last)
+            if i < len(subtitles) - 1:
+                sep_para = doc.add_paragraph()
+                sep_para.paragraph_format.space_before = Pt(2)
+                sep_para.paragraph_format.space_after = Pt(2)
+                sep_line = sep_para.add_run("- " * 40)
+                sep_line.font.size = Pt(5)
+                sep_line.font.color.rgb = self.COLOR_LIGHT

@@ -1,3 +1,8 @@
+"""
+app.py - Simple SRT to DOCX Converter
+Upload SRT files → Download DOCX files
+"""
+
 import os
 import io
 import zipfile
@@ -20,8 +25,6 @@ st.markdown("""
 <style>
     .stDownloadButton > button {
         width: 100%;
-        background-color: #1a478a !important;
-        color: white !important;
     }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -64,7 +67,7 @@ def parse_uploaded_srt(uploaded_file):
 
 
 def convert_to_docx(subtitles, filename):
-    """Convert subtitles to DOCX bytes."""
+    """Convert subtitles to DOCX and return bytes."""
     base_name = os.path.splitext(filename)[0]
     docx_filename = f"{base_name}.docx"
 
@@ -121,7 +124,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# ─── Validate File Sizes ─────────────────────────────────────
+# ─── Main Logic ───────────────────────────────────────────────
 if uploaded_files:
 
     # Check file sizes
@@ -138,7 +141,7 @@ if uploaded_files:
         )
         st.stop()
 
-    # Show uploaded files count
+    # Show uploaded count
     total_size = sum(f.size for f in uploaded_files)
     st.info(
         f"📁 **{len(uploaded_files)}** file(s) uploaded "
@@ -233,196 +236,3 @@ else:
 # ─── Footer ───────────────────────────────────────────────────
 st.divider()
 st.caption("SRT to DOCX Converter")
-```
-
-## 2. `docx_writer.py` — Plain Format Only
-
-```python
-"""
-DOCX Writer Module
-Creates Word documents from subtitle data - Plain English format only.
-"""
-
-from datetime import datetime
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-
-class DOCXWriter:
-    """Creates DOCX documents from subtitle data. Plain format only."""
-
-    COLOR_PRIMARY = RGBColor(0x1A, 0x47, 0x8A)
-    COLOR_TEXT = RGBColor(0x33, 0x33, 0x33)
-    COLOR_MUTED = RGBColor(0x88, 0x88, 0x88)
-    COLOR_LIGHT = RGBColor(0xCC, 0xCC, 0xCC)
-    COLOR_TIMESTAMP = RGBColor(0x7F, 0x8C, 0x8D)
-
-    def __init__(self):
-        self.doc = None
-
-    def create_document(self, subtitles, source_filename, output_path):
-        """
-        Create a DOCX document from subtitle data.
-
-        Args:
-            subtitles: List of SubtitleEntry objects or dicts
-            source_filename: Original SRT filename
-            output_path: Path to save the DOCX file
-        """
-        self.doc = Document()
-        self._setup_page(self.doc)
-        self._add_title(self.doc, source_filename)
-        self._add_metadata(self.doc, subtitles, source_filename)
-        self._add_spacer(self.doc)
-
-        # Convert SubtitleEntry objects to dicts
-        subtitle_dicts = []
-        for sub in subtitles:
-            if hasattr(sub, 'to_dict'):
-                subtitle_dicts.append(sub.to_dict())
-            elif isinstance(sub, dict):
-                subtitle_dicts.append(sub)
-            else:
-                raise TypeError(f"Unexpected subtitle type: {type(sub)}")
-
-        # Write plain format
-        self._write_plain_format(self.doc, subtitle_dicts)
-
-        # Add footer
-        self._add_footer(self.doc, len(subtitle_dicts))
-
-        # Save
-        self.doc.save(output_path)
-
-    def _setup_page(self, doc):
-        """Configure page margins."""
-        section = doc.sections[0]
-        section.top_margin = Inches(0.8)
-        section.bottom_margin = Inches(0.8)
-        section.left_margin = Inches(0.8)
-        section.right_margin = Inches(0.8)
-        section.page_width = Inches(8.5)
-        section.page_height = Inches(11)
-
-    def _add_title(self, doc, source_filename):
-        """Add document title."""
-        title = doc.add_heading(level=0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        title_run = title.add_run(f"Subtitles: {source_filename}")
-        title_run.font.size = Pt(18)
-        title_run.font.color.rgb = self.COLOR_PRIMARY
-        title_run.bold = True
-
-    def _add_metadata(self, doc, subtitles, source_filename):
-        """Add document info."""
-        meta_para = doc.add_paragraph()
-        meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        info_parts = [
-            f"Source: {source_filename}",
-            f"Total Subtitles: {len(subtitles)}",
-            f"Converted: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "Language: English",
-        ]
-
-        # Get duration from last subtitle
-        if subtitles:
-            try:
-                last_sub = subtitles[-1]
-                if hasattr(last_sub, 'end_time'):
-                    end_time = last_sub.end_time
-                elif isinstance(last_sub, dict):
-                    end_time = last_sub.get('end_time', '')
-                else:
-                    end_time = ''
-
-                if end_time:
-                    info_parts.append(f"Duration: ~{end_time}")
-            except (AttributeError, IndexError):
-                pass
-
-        info_text = "  |  ".join(info_parts)
-        meta_run = meta_para.add_run(info_text)
-        meta_run.font.size = Pt(8)
-        meta_run.font.color.rgb = self.COLOR_MUTED
-        meta_run.italic = True
-
-        # Horizontal line
-        line_para = doc.add_paragraph()
-        line_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        line_run = line_para.add_run("_" * 80)
-        line_run.font.size = Pt(6)
-        line_run.font.color.rgb = self.COLOR_LIGHT
-
-    def _add_spacer(self, doc):
-        """Add blank space."""
-        spacer = doc.add_paragraph()
-        spacer.paragraph_format.space_before = Pt(2)
-        spacer.paragraph_format.space_after = Pt(2)
-
-    def _add_footer(self, doc, count):
-        """Add document footer."""
-        self._add_spacer(doc)
-
-        line_para = doc.add_paragraph()
-        line_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        line_run = line_para.add_run("_" * 80)
-        line_run.font.size = Pt(6)
-        line_run.font.color.rgb = self.COLOR_LIGHT
-
-        footer_para = doc.add_paragraph()
-        footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        footer_run = footer_para.add_run(
-            f"Generated by SRT to DOCX Converter  |  "
-            f"{count} subtitle entries  |  "
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        footer_run.font.size = Pt(7)
-        footer_run.font.color.rgb = self.COLOR_MUTED
-        footer_run.italic = True
-
-    def _write_plain_format(self, doc, subtitles):
-        """Write subtitles in plain numbered format."""
-        for i, sub in enumerate(subtitles):
-
-            # Number + Timestamp line
-            header_para = doc.add_paragraph()
-            header_para.paragraph_format.space_before = Pt(6)
-            header_para.paragraph_format.space_after = Pt(2)
-
-            # Number
-            index_run = header_para.add_run(f"[{sub['index']}]  ")
-            index_run.bold = True
-            index_run.font.size = Pt(9)
-            index_run.font.color.rgb = self.COLOR_PRIMARY
-
-            # Timestamp
-            time_run = header_para.add_run(
-                f"{sub['start_time']}  -->  {sub['end_time']}"
-            )
-            time_run.font.size = Pt(9)
-            time_run.font.color.rgb = self.COLOR_TIMESTAMP
-            time_run.italic = True
-            time_run.font.name = 'Consolas'
-
-            # Subtitle text
-            text_para = doc.add_paragraph()
-            text_para.paragraph_format.space_before = Pt(0)
-            text_para.paragraph_format.space_after = Pt(4)
-            text_para.paragraph_format.left_indent = Inches(0.3)
-
-            text_run = text_para.add_run(sub['text'])
-            text_run.font.size = Pt(11)
-            text_run.font.color.rgb = self.COLOR_TEXT
-            text_run.font.name = 'Calibri'
-
-            # Separator line (except last)
-            if i < len(subtitles) - 1:
-                sep_para = doc.add_paragraph()
-                sep_para.paragraph_format.space_before = Pt(2)
-                sep_para.paragraph_format.space_after = Pt(2)
-                sep_line = sep_para.add_run("- " * 40)
-                sep_line.font.size = Pt(5)
-                sep_line.font.color.rgb = self.COLOR_LIGHT

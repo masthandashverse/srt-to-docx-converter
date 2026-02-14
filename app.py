@@ -1,5 +1,6 @@
 """
-app.py - Streamlit Web App for SRT to DOCX Converter
+app.py - Simple SRT to DOCX Converter
+Upload SRT files → Download DOCX files
 """
 
 import os
@@ -19,17 +20,31 @@ st.set_page_config(
     layout="centered"
 )
 
-# ─── Initialize Parser and Writer ─────────────────────────────
+# ─── Simple CSS ───────────────────────────────────────────────
+st.markdown("""
+<style>
+    .stDownloadButton > button {
+        width: 100%;
+        background-color: #1a478a !important;
+        color: white !important;
+    }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ─── Initialize ───────────────────────────────────────────────
 parser = SRTParser()
 writer = DOCXWriter()
+
+MAX_FILE_SIZE_MB = 500
 
 
 # ─── Helper Functions ─────────────────────────────────────────
 def parse_uploaded_srt(uploaded_file):
-    """Parse an uploaded SRT file and return subtitle entries."""
+    """Parse an uploaded SRT file."""
     content_bytes = uploaded_file.getvalue()
 
-    # Try different encodings
     encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
     content = None
 
@@ -43,11 +58,9 @@ def parse_uploaded_srt(uploaded_file):
     if content is None:
         return None
 
-    # Clean content
     content = content.replace('\r\n', '\n').replace('\r', '\n')
     content = content.lstrip('\ufeff').strip()
 
-    # Parse using the existing parser methods
     subtitles = parser._regex_parse(content)
     if not subtitles:
         subtitles = parser._block_parse(content)
@@ -55,12 +68,11 @@ def parse_uploaded_srt(uploaded_file):
     return subtitles
 
 
-def convert_to_docx(subtitles, filename, style):
-    """Convert subtitles to DOCX and return bytes."""
+def convert_to_docx(subtitles, filename):
+    """Convert subtitles to DOCX bytes."""
     base_name = os.path.splitext(filename)[0]
     docx_filename = f"{base_name}.docx"
 
-    # Create temp file for writing
     with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp:
         tmp_path = tmp.name
 
@@ -68,8 +80,7 @@ def convert_to_docx(subtitles, filename, style):
         writer.create_document(
             subtitles=subtitles,
             source_filename=filename,
-            output_path=tmp_path,
-            style=style
+            output_path=tmp_path
         )
 
         with open(tmp_path, 'rb') as f:
@@ -91,113 +102,64 @@ def make_zip(files_list):
     return buf.getvalue()
 
 
+def format_size(size_bytes):
+    """Format bytes to readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
 # ─── App UI ───────────────────────────────────────────────────
 
 # Title
 st.title("📝 SRT to DOCX Converter")
-st.write("Convert subtitle files (.srt) to Word documents (.docx)")
+st.write("Upload subtitle files → Get Word documents")
 st.divider()
 
-# ─── Sidebar: Settings ────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ Settings")
-
-    style = st.radio(
-        "Output Format:",
-        options=["table", "plain", "formatted", "text_only", "script"],
-        index=0,
-        format_func=lambda x: {
-            "table": "📊 Table - Columns with timestamps",
-            "plain": "📄 Plain - Numbered with separators",
-            "formatted": "🎨 Formatted - Inline timestamps",
-            "text_only": "📝 Text Only - No timestamps",
-            "script": "🎬 Script - Screenplay style",
-        }[x]
-    )
-
-    st.divider()
-    st.subheader("📖 How to Use")
-    st.markdown("""
-    1. Upload `.srt` files above
-    2. Pick a format style
-    3. Click **Convert**
-    4. Download your `.docx` files
-    """)
-
 # ─── File Upload ──────────────────────────────────────────────
-st.subheader("📁 Upload SRT Files")
-
 uploaded_files = st.file_uploader(
-    "Choose SRT files",
+    "Upload SRT files",
     type=["srt"],
     accept_multiple_files=True
 )
 
-# ─── Show Uploaded Files ──────────────────────────────────────
+# ─── Validate File Sizes ─────────────────────────────────────
 if uploaded_files:
-    st.success(f"✅ {len(uploaded_files)} file(s) uploaded")
 
-    # Show file list
-    with st.expander("View uploaded files", expanded=False):
-        for f in uploaded_files:
-            size_kb = f.size / 1024
-            st.write(f"📄 **{f.name}** — {size_kb:.1f} KB")
+    # Check file sizes
+    oversized = []
+    for f in uploaded_files:
+        size_mb = f.size / (1024 * 1024)
+        if size_mb > MAX_FILE_SIZE_MB:
+            oversized.append(f"{f.name} ({size_mb:.1f} MB)")
 
-    st.divider()
+    if oversized:
+        st.error(
+            f"Files exceed {MAX_FILE_SIZE_MB} MB limit:\n\n"
+            + "\n".join(oversized)
+        )
+        st.stop()
 
-    # ─── Preview (optional) ───────────────────────────────────
-    st.subheader("👁️ Preview")
-
-    preview_file = st.selectbox(
-        "Select file to preview:",
-        uploaded_files,
-        format_func=lambda f: f.name
+    # Show uploaded files count
+    total_size = sum(f.size for f in uploaded_files)
+    st.info(
+        f"📁 **{len(uploaded_files)}** file(s) uploaded "
+        f"({format_size(total_size)})"
     )
 
-    if preview_file:
-        try:
-            subs = parse_uploaded_srt(preview_file)
-            preview_file.seek(0)  # Reset for later use
-
-            if subs:
-                st.info(f"Found **{len(subs)}** subtitles")
-
-                # Show first few as table
-                show_count = min(10, len(subs))
-                preview_data = []
-                for sub in subs[:show_count]:
-                    d = sub.to_dict() if hasattr(sub, 'to_dict') else sub
-                    preview_data.append({
-                        "#": d["index"],
-                        "Start": d["start_time"],
-                        "End": d["end_time"],
-                        "Text": d["text"][:80]
-                    })
-
-                st.dataframe(preview_data, use_container_width=True, hide_index=True)
-
-                if len(subs) > show_count:
-                    st.caption(f"Showing first {show_count} of {len(subs)} entries")
-            else:
-                st.warning("Could not parse subtitles from this file")
-        except Exception as e:
-            st.error(f"Preview error: {e}")
-
-    st.divider()
-
     # ─── Convert Button ───────────────────────────────────────
-    st.subheader("🚀 Convert")
-
     if st.button(
-        f"Convert {len(uploaded_files)} file(s) to DOCX",
+        f"🚀 Convert {len(uploaded_files)} file(s)",
         type="primary",
         use_container_width=True
     ):
         results = []
         errors = []
 
-        # Progress bar
-        progress = st.progress(0, text="Starting...")
+        progress = st.progress(0, text="Converting...")
 
         for i, uploaded_file in enumerate(uploaded_files):
             fname = uploaded_file.name
@@ -207,7 +169,6 @@ if uploaded_files:
             )
 
             try:
-                # Parse
                 uploaded_file.seek(0)
                 subs = parse_uploaded_srt(uploaded_file)
 
@@ -215,16 +176,15 @@ if uploaded_files:
                     errors.append(f"❌ **{fname}** — No subtitles found")
                     continue
 
-                # Convert
-                docx_name, docx_bytes = convert_to_docx(subs, fname, style)
+                docx_name, docx_bytes = convert_to_docx(subs, fname)
                 results.append((docx_name, docx_bytes, len(subs)))
 
             except Exception as e:
                 errors.append(f"❌ **{fname}** — {str(e)}")
 
-        progress.progress(1.0, text="Done!")
+        progress.progress(1.0, text="✅ Done!")
 
-        # ─── Store Results in Session ─────────────────────────
+        # Store results
         st.session_state["results"] = results
         st.session_state["errors"] = errors
 
@@ -234,18 +194,18 @@ if uploaded_files:
         errors = st.session_state["errors"]
 
         if results:
-            st.success(f"🎉 {len(results)} file(s) converted successfully!")
+            st.success(f"✅ {len(results)} file(s) converted!")
+
         if errors:
-            st.warning(f"⚠️ {len(errors)} file(s) had errors")
+            st.warning(f"⚠️ {len(errors)} file(s) failed")
             for err in errors:
                 st.write(err)
 
-        st.divider()
-
         if results:
+            st.divider()
             st.subheader("💾 Download")
 
-            # Download ALL as ZIP (if multiple files)
+            # ZIP download for multiple files
             if len(results) > 1:
                 zip_data = make_zip([(n, b) for n, b, _ in results])
                 st.download_button(
@@ -255,17 +215,13 @@ if uploaded_files:
                     mime="application/zip",
                     use_container_width=True
                 )
-
                 st.divider()
-                st.write("**Or download individually:**")
 
             # Individual downloads
             for docx_name, docx_bytes, sub_count in results:
                 col1, col2 = st.columns([3, 1])
-
                 with col1:
                     st.write(f"📄 **{docx_name}** — {sub_count} subtitles")
-
                 with col2:
                     st.download_button(
                         label="⬇️ Download",
@@ -276,10 +232,9 @@ if uploaded_files:
                         key=f"dl_{docx_name}"
                     )
 
-# ─── Empty State ──────────────────────────────────────────────
 else:
     st.info("👆 Upload `.srt` files to get started")
 
 # ─── Footer ───────────────────────────────────────────────────
 st.divider()
-st.caption("📝 SRT to DOCX Converter • Built with Streamlit & python-docx")
+st.caption("SRT to DOCX Converter")

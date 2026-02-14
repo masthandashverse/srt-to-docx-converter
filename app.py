@@ -1,6 +1,6 @@
 """
 app.py - Simple SRT to DOCX Converter
-Upload SRT files → Download DOCX files
+Upload SRT files → Save DOCX files directly to your folder
 """
 
 import os
@@ -23,11 +23,6 @@ st.set_page_config(
 # ─── Simple CSS ───────────────────────────────────────────────
 st.markdown("""
 <style>
-    .stDownloadButton > button {
-        width: 100%;
-        background-color: #1a478a !important;
-        color: white !important;
-    }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -68,38 +63,25 @@ def parse_uploaded_srt(uploaded_file):
     return subtitles
 
 
-def convert_to_docx(subtitles, filename):
-    """Convert subtitles to DOCX bytes."""
+def convert_and_save(subtitles, filename, output_folder):
+    """Convert subtitles and save DOCX directly to folder."""
     base_name = os.path.splitext(filename)[0]
     docx_filename = f"{base_name}.docx"
+    output_path = os.path.join(output_folder, docx_filename)
 
-    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as tmp:
-        tmp_path = tmp.name
+    # Handle duplicate filenames
+    counter = 1
+    while os.path.exists(output_path):
+        output_path = os.path.join(output_folder, f"{base_name} ({counter}).docx")
+        counter += 1
 
-    try:
-        writer.create_document(
-            subtitles=subtitles,
-            source_filename=filename,
-            output_path=tmp_path
-        )
+    writer.create_document(
+        subtitles=subtitles,
+        source_filename=filename,
+        output_path=output_path
+    )
 
-        with open(tmp_path, 'rb') as f:
-            docx_bytes = f.read()
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-    return docx_filename, docx_bytes
-
-
-def make_zip(files_list):
-    """Create ZIP from list of (filename, bytes) tuples."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for name, data in files_list:
-            zf.writestr(name, data)
-    buf.seek(0)
-    return buf.getvalue()
+    return output_path
 
 
 def format_size(size_bytes):
@@ -116,20 +98,35 @@ def format_size(size_bytes):
 
 # Title
 st.title("📝 SRT to DOCX Converter")
-st.write("Upload subtitle files → Get Word documents")
+st.write("Upload subtitle files → Save Word documents to your folder")
 st.divider()
 
+# ─── Output Folder ────────────────────────────────────────────
+st.subheader("📁 Output Folder")
+
+# Default folder = Desktop
+default_folder = os.path.join(os.path.expanduser("~"), "Desktop", "SRT_Converted")
+
+output_folder = st.text_input(
+    "Enter folder path where DOCX files will be saved:",
+    value=default_folder,
+    help="Type the full folder path. Folder will be created if it doesn't exist."
+)
+
 # ─── File Upload ──────────────────────────────────────────────
+st.divider()
+st.subheader("📄 Upload SRT Files")
+
 uploaded_files = st.file_uploader(
-    "Upload SRT files",
+    "Choose SRT files",
     type=["srt"],
     accept_multiple_files=True
 )
 
-# ─── Validate File Sizes ─────────────────────────────────────
+# ─── Main Logic ───────────────────────────────────────────────
 if uploaded_files:
 
-    # Check file sizes
+    # Validate file sizes
     oversized = []
     for f in uploaded_files:
         size_mb = f.size / (1024 * 1024)
@@ -143,20 +140,39 @@ if uploaded_files:
         )
         st.stop()
 
-    # Show uploaded files count
+    # Show file count
     total_size = sum(f.size for f in uploaded_files)
     st.info(
         f"📁 **{len(uploaded_files)}** file(s) uploaded "
         f"({format_size(total_size)})"
     )
 
+    # Show files list
+    with st.expander("View uploaded files"):
+        for f in uploaded_files:
+            st.write(f"📄 {f.name} — {format_size(f.size)}")
+
+    st.divider()
+
     # ─── Convert Button ───────────────────────────────────────
     if st.button(
-        f"🚀 Convert {len(uploaded_files)} file(s)",
+        f"🚀 Convert & Save {len(uploaded_files)} file(s) to folder",
         type="primary",
         use_container_width=True
     ):
-        results = []
+        # Validate folder path
+        if not output_folder.strip():
+            st.error("❌ Please enter an output folder path!")
+            st.stop()
+
+        # Create folder
+        try:
+            os.makedirs(output_folder.strip(), exist_ok=True)
+        except Exception as e:
+            st.error(f"❌ Cannot create folder: {e}")
+            st.stop()
+
+        saved_files = []
         errors = []
 
         progress = st.progress(0, text="Converting...")
@@ -176,65 +192,43 @@ if uploaded_files:
                     errors.append(f"❌ **{fname}** — No subtitles found")
                     continue
 
-                docx_name, docx_bytes = convert_to_docx(subs, fname)
-                results.append((docx_name, docx_bytes, len(subs)))
+                # Save directly to folder
+                saved_path = convert_and_save(
+                    subs, fname, output_folder.strip()
+                )
+                saved_files.append((fname, saved_path, len(subs)))
 
             except Exception as e:
                 errors.append(f"❌ **{fname}** — {str(e)}")
 
         progress.progress(1.0, text="✅ Done!")
 
-        # Store results
-        st.session_state["results"] = results
-        st.session_state["errors"] = errors
+        # ─── Show Results ─────────────────────────────────────
+        if saved_files:
+            st.success(
+                f"🎉 **{len(saved_files)} file(s) saved** to:\n\n"
+                f"`{output_folder.strip()}`"
+            )
 
-    # ─── Show Results ─────────────────────────────────────────
-    if "results" in st.session_state:
-        results = st.session_state["results"]
-        errors = st.session_state["errors"]
+            st.divider()
+            st.subheader("✅ Saved Files")
 
-        if results:
-            st.success(f"✅ {len(results)} file(s) converted!")
+            for original_name, saved_path, sub_count in saved_files:
+                docx_name = os.path.basename(saved_path)
+                st.write(
+                    f"✅ **{docx_name}** — "
+                    f"{sub_count} subtitles"
+                )
 
         if errors:
+            st.divider()
             st.warning(f"⚠️ {len(errors)} file(s) failed")
             for err in errors:
                 st.write(err)
-
-        if results:
-            st.divider()
-            st.subheader("💾 Download")
-
-            # ZIP download for multiple files
-            if len(results) > 1:
-                zip_data = make_zip([(n, b) for n, b, _ in results])
-                st.download_button(
-                    label=f"📦 Download ALL ({len(results)} files) as ZIP",
-                    data=zip_data,
-                    file_name="converted_subtitles.zip",
-                    mime="application/zip",
-                    use_container_width=True
-                )
-                st.divider()
-
-            # Individual downloads
-            for docx_name, docx_bytes, sub_count in results:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"📄 **{docx_name}** — {sub_count} subtitles")
-                with col2:
-                    st.download_button(
-                        label="⬇️ Download",
-                        data=docx_bytes,
-                        file_name=docx_name,
-                        mime="application/vnd.openxmlformats-officedocument"
-                             ".wordprocessingml.document",
-                        key=f"dl_{docx_name}"
-                    )
 
 else:
     st.info("👆 Upload `.srt` files to get started")
 
 # ─── Footer ───────────────────────────────────────────────────
 st.divider()
-st.caption("SRT to DOCX Converter")
+st.caption("SRT to DOCX Converter — Files save directly to your folder")
